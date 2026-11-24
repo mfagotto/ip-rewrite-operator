@@ -1,0 +1,12 @@
+ip-rewrite-operator
+Copyright 2026 The ip-rewrite-operator Authors.
+
+This product includes software design and adapted scripts inspired by
+Soteria IP Rewrite (https://github.com/raffaelespazzoli/soteria),
+Copyright The Soteria Authors, licensed under the Apache License,
+Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0).
+
+Adapted materials under images/init/ (entrypoint, RHEL/Windows handlers,
+virt-windows-ip-rewrite, Containerfile pattern) and the mutating webhook
+injection approach in internal/webhook are derived from that project and
+relicensed under Apache-2.0 with this NOTICE.

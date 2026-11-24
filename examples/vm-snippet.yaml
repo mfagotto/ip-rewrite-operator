@@ -1,0 +1,15 @@
+# Fragment to add to a VirtualMachine for IP rewrite on next stop/start.
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: example-vm
+  namespace: vm-net-demo
+spec:
+  template:
+    metadata:
+      labels:
+        iprewrite.windowsreip.io/enabled: "true"
+      annotations:
+        iprewrite.windowsreip.io/eth0-ip: "10.0.2.100/24;10.0.2.1"
+        iprewrite.windowsreip.io/dns: "10.0.2.10,10.0.2.11"
+    spec: {}

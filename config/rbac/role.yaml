@@ -1,0 +1,43 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ip-rewrite-operator-manager
+rules:
+  - apiGroups: [iprewrite.windowsreip.io]
+    resources: [iprewriteconfigs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [iprewrite.windowsreip.io]
+    resources: [iprewriteconfigs/status]
+    verbs: [get, update, patch]
+  - apiGroups: [iprewrite.windowsreip.io]
+    resources: [iprewriteconfigs/finalizers]
+    verbs: [update]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles, clusterrolebindings]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [security.openshift.io]
+    resources: [securitycontextconstraints]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ip-rewrite-operator-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ip-rewrite-operator-manager
+subjects:
+  - kind: ServiceAccount
+    name: ip-rewrite-operator
+    namespace: ip-rewrite-operator
