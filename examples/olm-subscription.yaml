@@ -1,0 +1,41 @@
+# OLM install — CatalogSource + Subscription (lab).
+# Catalog/bundle tags live on the operator image repo (robot cannot create new Quay repos):
+#   bundle:  quay.io/mfagotto/ip-rewrite-operator:bundle-0.2.0
+#   catalog: quay.io/mfagotto/ip-rewrite-operator:catalog-0.2.0
+# After CSV Succeeded, run: ./hack/olm-post-install.sh
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ip-rewrite-operator
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: ip-rewrite-operator
+  namespace: ip-rewrite-operator
+spec: {}
+# AllNamespaces — webhook must see virt-launcher pods in targetNamespaces (e.g. vm-net-demo)
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: ip-rewrite-operator
+  namespace: ip-rewrite-operator
+spec:
+  sourceType: grpc
+  image: quay.io/mfagotto/ip-rewrite-operator:catalog-0.2.0
+  displayName: IP Rewrite Operator
+  publisher: mfagotto
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: ip-rewrite-operator
+  namespace: ip-rewrite-operator
+spec:
+  channel: alpha
+  name: ip-rewrite-operator
+  source: ip-rewrite-operator
+  sourceNamespace: ip-rewrite-operator
+  installPlanApproval: Automatic

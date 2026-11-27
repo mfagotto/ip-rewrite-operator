@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	virtv1 "kubevirt.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -33,6 +34,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(iprewritev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(virtv1.AddToScheme(scheme))
 }
 
 func main() {
@@ -85,7 +87,7 @@ func main() {
 		}),
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "ip-rewrite-operator.windowsreip.io",
+		LeaderElectionID:       "ip-rewrite-operator.reip.io",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -97,6 +99,14 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "IPRewriteConfig")
+		os.Exit(1)
+	}
+
+	if err := (&controller.VMAppliedReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "VMApplied")
 		os.Exit(1)
 	}
 

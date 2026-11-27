@@ -1,0 +1,202 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  name: ip-rewrite-operator.v0.2.0
+  namespace: placeholder
+  annotations:
+    alm-examples: |-
+      [
+        {
+          "apiVersion": "iprewrite.reip.io/v1alpha1",
+          "kind": "IPRewriteConfig",
+          "metadata": { "name": "cluster" },
+          "spec": {
+            "targetNamespaces": ["vm-net-demo"],
+            "requestKVMDevice": true,
+            "manageSCC": true,
+            "initContainerImage": "quay.io/mfagotto/ip-rewrite-operator:init-0.2.0",
+            "initContainerPullPolicy": "IfNotPresent",
+            "webhookFailurePolicy": "Ignore"
+          }
+        }
+      ]
+    capabilities: Basic Install
+    categories: OpenShift Optional
+    description: Offline guest IP rewrite for OpenShift Virtualization VMs via mutating webhook + libguestfs init container.
+    operators.openshift.io/infrastructure-features: '["disconnected"]'
+    repository: https://github.com/mfagotto/ip-rewrite-operator
+    support: Experimental
+    createdAt: "2026-11-24T00:00:00Z"
+spec:
+  displayName: IP Rewrite Operator
+  description: |
+    Rewrites static IPv4 (and optional DNS) on PVC-backed VM disks before boot
+    for disaster recovery and lab cloning on OpenShift Virtualization 4.22.
+
+    Webhook TLS: OpenShift Service CA. The webhook Service carries
+    `service.beta.openshift.io/serving-cert-secret-name`. After OLM creates the
+    MutatingWebhookConfiguration from `webhookdefinitions`, annotate it with
+    `service.beta.openshift.io/inject-cabundle=true` (kustomize install under
+    `config/` does this automatically). Apply `config/openshift/scc.yaml` for the
+    virt-launcher SCC (not embeddable in registry+v1 bundles).
+
+    Preferred install namespace: `ip-rewrite-operator` (OwnNamespace / SingleNamespace).
+  version: 0.2.0
+  maturity: beta
+  minKubeVersion: 1.28.0
+  maintainers:
+    - name: mfagotto
+      email: marco.a.fagotto@gmail.com
+  provider:
+    name: mfagotto
+  links:
+    - name: GitHub
+      url: https://github.com/mfagotto/ip-rewrite-operator
+  keywords:
+    - kubevirt
+    - virtualization
+    - networking
+    - disaster-recovery
+  installModes:
+    - type: OwnNamespace
+      supported: true
+    - type: SingleNamespace
+      supported: true
+    - type: MultiNamespace
+      supported: false
+    - type: AllNamespaces
+      supported: true
+  customresourcedefinitions:
+    owned:
+      - name: iprewriteconfigs.iprewrite.reip.io
+        version: v1alpha1
+        kind: IPRewriteConfig
+        displayName: IP Rewrite Config
+        description: Cluster configuration for IP rewrite webhook and SCC bindings.
+  install:
+    strategy: deployment
+    spec:
+      clusterPermissions:
+        - serviceAccountName: ip-rewrite-operator
+          rules:
+            - apiGroups: [iprewrite.reip.io]
+              resources: [iprewriteconfigs]
+              verbs: [get, list, watch, create, update, patch, delete]
+            - apiGroups: [iprewrite.reip.io]
+              resources: [iprewriteconfigs/status]
+              verbs: [get, update, patch]
+            - apiGroups: [iprewrite.reip.io]
+              resources: [iprewriteconfigs/finalizers]
+              verbs: [update]
+            - apiGroups: [""]
+              resources: [namespaces]
+              verbs: [get, list, watch]
+            - apiGroups: [rbac.authorization.k8s.io]
+              resources: [clusterroles, clusterrolebindings]
+              verbs: [get, list, watch, create, update, patch]
+            - apiGroups: [security.openshift.io]
+              resources: [securitycontextconstraints]
+              verbs: [get, list, watch, create, update, patch]
+            - apiGroups: [security.openshift.io]
+              resources: [securitycontextconstraints]
+              resourceNames: [ip-rewrite-operator]
+              verbs: [use]
+            - apiGroups: [coordination.k8s.io]
+              resources: [leases]
+              verbs: [get, list, watch, create, update, patch, delete]
+            - apiGroups: [""]
+              resources: [events]
+              verbs: [create, patch]
+            - apiGroups: [kubevirt.io]
+              resources: [virtualmachines]
+              verbs: [get, list, watch, patch, update]
+            - apiGroups: [kubevirt.io]
+              resources: [virtualmachineinstances]
+              verbs: [get, list, watch]
+      deployments:
+        - name: ip-rewrite-operator
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app.kubernetes.io/name: ip-rewrite-operator
+                control-plane: controller-manager
+            strategy:
+              type: RollingUpdate
+            template:
+              metadata:
+                labels:
+                  app.kubernetes.io/name: ip-rewrite-operator
+                  control-plane: controller-manager
+              spec:
+                serviceAccountName: ip-rewrite-operator
+                containers:
+                  - name: manager
+                    image: quay.io/mfagotto/ip-rewrite-operator:0.2.0
+                    imagePullPolicy: Always
+                    args:
+                      - --leader-elect
+                      - --cert-dir=/tmp/k8s-webhook-server/serving-certs
+                      - --webhook-port=9443
+                      - --init-container-image=quay.io/mfagotto/ip-rewrite-operator:init-0.2.0
+                      - --init-container-pull-policy=IfNotPresent
+                      - --request-kvm-device=true
+                    ports:
+                      - name: webhook
+                        containerPort: 9443
+                        protocol: TCP
+                      - name: health
+                        containerPort: 8081
+                        protocol: TCP
+                      - name: metrics
+                        containerPort: 8080
+                        protocol: TCP
+                    # OLM mounts webhook TLS at /tmp/k8s-webhook-server/serving-certs
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: health
+                      initialDelaySeconds: 15
+                      periodSeconds: 20
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: health
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 128Mi
+                      limits:
+                        cpu: 500m
+                        memory: 256Mi
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        drop: [ALL]
+                      runAsNonRoot: true
+                terminationGracePeriodSeconds: 10
+  webhookdefinitions:
+    - type: MutatingAdmissionWebhook
+      admissionReviewVersions: [v1]
+      containerPort: 9443
+      targetPort: 9443
+      deploymentName: ip-rewrite-operator
+      failurePolicy: Ignore
+      generateName: ip-rewrite.reip.io
+      sideEffects: None
+      webhookPath: /mutate-v1-pod
+      objectSelector:
+        matchLabels:
+          iprewrite.reip.io/enabled: "true"
+      rules:
+        - apiGroups: [""]
+          apiVersions: [v1]
+          operations: [CREATE]
+          resources: [pods]
+  relatedImages:
+    - name: manager
+      image: quay.io/mfagotto/ip-rewrite-operator:0.2.0
+    - name: init
+      image: quay.io/mfagotto/ip-rewrite-operator:init-0.2.0

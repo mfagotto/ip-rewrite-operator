@@ -1,12 +1,60 @@
+# Build / binaries
 bin/
 dist/
 *.exe
 *.test
 *.out
-.idea/
-.vscode/
-*.swp
+*.tar.gz
 cover.out
 cover.html
-*.tar.gz
 bundle_tmp/
+
+# IDE / editor
+.idea/
+.vscode/
+.cursor/
+*.swp
+.DS_Store
+
+# Local cluster / registry credentials (never commit)
+.kubeconfig
+.kubeconfig*
+*.kubeconfig
+.env
+.env.*
+*.env
+quay-auth.json
+**/auth.json
+.docker/
+.docker/config.json
+pull-secret*
+*-pull-secret*
+docker-config*.json
+registry-auth*
+
+# TLS / keys (local-generated only)
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+!**/testdata/**
+
+# Go module / build caches used by local scripts
+.gopath/
+.gocache/
+
+# Run artifacts (e2e dumps, oc get output, VA logs — may contain cluster details)
+results/
+
+# Lab / WIP kept next to the repo but never committed
+local/
+
+# Disk / media artifacts (Windows GA / golden image work)
+*.iso
+*.qcow2
+*.img
+*.raw
+*.vhd
+*.vhdx
+*.vmdk

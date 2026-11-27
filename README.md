@@ -1,68 +1,54 @@
 # ip-rewrite-operator
 
-OpenShift Virtualization add-on that rewrites static guest IPv4 (and optional DNS) on PVC-backed VM disks **before boot**, via a mutating admission webhook and a libguestfs init container.
+Rewrite static guest IPv4 (and optional DNS) on OpenShift Virtualization VMs **before the guest boots**. A mutating webhook injects a libguestfs init container that edits the root disk offline. This is **not** CloudInit-based reIP.
 
-Designed for OpenShift 4.22 / OpenShift Virtualization: **OpenShift Service CA** for webhook TLS (no cert-manager), optional SCC management, fail-open webhook.
+**Version:** 0.2.0 (pre-production beta) · OpenShift **4.22** / OpenShift Virtualization  
+**Images:** `quay.io/mfagotto/ip-rewrite-operator:0.2.0` (manager, UBI 10) · `:init-0.2.0` (libguestfs init, CentOS Stream 10)
+
+Designed around **OpenShift Service CA** for webhook TLS (no cert-manager required), optional SCC management, and a fail-open webhook.
 
 Architecture inspired by [Soteria IP Rewrite](https://raffaelespazzoli.github.io/soteria/architecture/ip-rewrite/) — see [NOTICE](NOTICE).
 
-## Repo
+## Documentation
 
-- Local: nested under the windowsreip lab tree for convenience  
+| Document | Contents |
+|----------|----------|
+| [User guide](docs/user-guide.md) | Install, configure, opt in VMs, verify, troubleshoot, limitations |
+| [Architecture](docs/architecture.md) | Webhook, init, and applied-stamping flow |
+| [Examples](examples/vm-snippet.yaml) | Lean Linux and Windows VM annotation fragments |
+| [OLM](docs/olm.md) | Bundle / catalog packaging and OLM install notes |
+| [Test records](docs/test-records/README.md) | Scrubbed beta validation matrix and gate |
+| [Roadmap](docs/ROADMAP.md) | Planned work after 0.2.0 |
+
+## Repository
+
 - Origin: `https://github.com/mfagotto/ip-rewrite-operator.git`
-
-## VM API (`iprewrite.windowsreip.io`)
-
-| Kind | Key | Example |
-|------|-----|---------|
-| Label | `iprewrite.windowsreip.io/enabled` | `"true"` on `spec.template.metadata.labels` |
-| Annotation | `iprewrite.windowsreip.io/<iface>-ip` | `"10.0.2.100/24;10.0.2.1"` |
-| Annotation | `iprewrite.windowsreip.io/dns` | `"10.0.2.10,10.0.2.11"` |
-
-Put labels/annotations on the **VM pod template** (`spec.template.metadata`) so KubeVirt copies them onto the virt-launcher pod.
-
-## Cluster config
-
-```yaml
-apiVersion: iprewrite.windowsreip.io/v1alpha1
-kind: IPRewriteConfig
-metadata:
-  name: cluster
-spec:
-  targetNamespaces: [vm-net-demo]
-  requestKVMDevice: true
-  manageSCC: true
-```
+- Layout: operator (`cmd/`, `internal/`), init image (`images/init/`), manifests (`config/`), OLM (`bundle/`), docs (`docs/`)
 
 ## Develop
 
 ```bash
-make test
-make build
-# images (when ready to push):
-make docker-build
-make docker-build-init
+make test    # unit tests
+make build   # compile the manager
+make fmt vet
 ```
 
-## Deploy (kustomize)
+Container images (when ready to push):
 
 ```bash
-# After building/pushing images, edit config/manager/manager.yaml image refs if needed
-oc apply -k config/default
+make docker-build        # manager
+make docker-build-init   # init
 ```
 
-Uninstall: `make undeploy` or `oc delete -k config/default`.
+OLM bundle checks: `make bundle-validate` (see [docs/olm.md](docs/olm.md)).
 
-## Tests
+**Install and day-2 usage** (kustomize, OLM, VM annotations, limitations): follow the [user guide](docs/user-guide.md) — do not duplicate that path here.
 
-| Layer | Command / location |
-|-------|-------------------|
-| A unit | `make test` |
-| B fixtures | `hack/run-fixture-tests.sh` (WIP) |
-| C e2e | `hack/e2e-install.sh` / `e2e-run.sh` / `e2e-uninstall.sh` (WIP) |
+## Validation
 
-Repeatable install → test → uninstall on one OpenShift cluster is supported; only one operator install at a time (cluster-scoped MWC/CRD/SCC).
+- Unit: `make test`
+- Cluster / VM e2e evidence: [docs/test-records/README.md](docs/test-records/README.md)
 
-## Limitations (v1)
+## Status and next steps
 
-IPv4 only; RHEL 7–10 and Windows Server 2016–2025 / Windows 11; PVC disks only; no hostname rewrite; no BitLocker; skip on live migration; fail-open if webhook down.
+**0.2.0** is the current beta line. Known limits and adoption guidance live in the [user guide](docs/user-guide.md). Planned follow-ups (namespace-scope fix, NIC identity by MAC, and more): [roadmap](docs/ROADMAP.md).

@@ -20,8 +20,8 @@ import (
 
 func TestAnnotationsToEnvVars(t *testing.T) {
 	env := annotationsToEnvVars(map[string]string{
-		"iprewrite.windowsreip.io/eth0-ip": "10.0.2.100/24;10.0.2.1",
-		"iprewrite.windowsreip.io/dns":    "10.0.2.10,10.0.2.11",
+		"iprewrite.reip.io/eth0-ip": "10.0.2.100/24;10.0.2.1",
+		"iprewrite.reip.io/dns":    "10.0.2.10,10.0.2.11",
 		"other.io/foo":                    "bar",
 	})
 	if len(env) != 2 {
@@ -44,7 +44,7 @@ func TestHandleMigrationSkip(t *testing.T) {
 				virtv1.MigrationJobLabel: "abc",
 			},
 			Annotations: map[string]string{
-				"iprewrite.windowsreip.io/eth0-ip": "10.0.2.100/24;10.0.2.1",
+				"iprewrite.reip.io/eth0-ip": "10.0.2.100/24;10.0.2.1",
 			},
 		},
 	}
@@ -60,6 +60,61 @@ func TestHandleMigrationSkip(t *testing.T) {
 	}
 }
 
+func TestDesiredConfigFingerprintStable(t *testing.T) {
+	a := map[string]string{
+		"iprewrite.reip.io/dns":     "8.8.8.8,1.1.1.1",
+		"iprewrite.reip.io/eth0-ip": "192.168.100.60/24;192.168.100.1",
+		AppliedAnnotation:                  "should-be-ignored",
+		"unrelated":                        "x",
+	}
+	b := map[string]string{
+		"iprewrite.reip.io/eth0-ip": "192.168.100.60/24;192.168.100.1",
+		"iprewrite.reip.io/dns":     "8.8.8.8,1.1.1.1",
+	}
+	fa, fb := DesiredConfigFingerprint(a), DesiredConfigFingerprint(b)
+	if fa == "" || fa != fb {
+		t.Fatalf("expected stable fingerprint, got %q vs %q", fa, fb)
+	}
+	b["iprewrite.reip.io/eth0-ip"] = "192.168.100.61/24;192.168.100.1"
+	if DesiredConfigFingerprint(b) == fa {
+		t.Fatal("fingerprint should change when IP changes")
+	}
+}
+
+func TestHandleSkipsWhenAppliedMatches(t *testing.T) {
+	anns := map[string]string{
+		"iprewrite.reip.io/eth0-ip": "10.0.2.100/24;10.0.2.1",
+		"iprewrite.reip.io/dns":     "10.0.2.10,10.0.2.11",
+	}
+	anns[AppliedAnnotation] = DesiredConfigFingerprint(anns)
+	pod := corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "virt-launcher-x",
+			Labels:      map[string]string{EnabledLabel: "true"},
+			Annotations: anns,
+		},
+		Spec: corev1.PodSpec{
+			Volumes: []corev1.Volume{{
+				Name: "rootdisk",
+				VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "rootdisk"},
+				},
+			}},
+			Containers: []corev1.Container{{Name: "compute", Image: "kubevirt/virt-launcher"}},
+		},
+	}
+	raw, _ := json.Marshal(pod)
+	h := &Handler{InitContainerImage: "init:dev"}
+	resp := h.Handle(context.Background(), admission.Request{
+		AdmissionRequest: admissionv1.AdmissionRequest{
+			Object: runtime.RawExtension{Raw: raw},
+		},
+	})
+	if !resp.Allowed || len(resp.Patches) != 0 {
+		t.Fatalf("expected allow with no patches when applied matches, got allowed=%v patches=%d", resp.Allowed, len(resp.Patches))
+	}
+}
+
 func TestHandleInjectsInit(t *testing.T) {
 	pod := corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -68,7 +123,7 @@ func TestHandleInjectsInit(t *testing.T) {
 				EnabledLabel: "true",
 			},
 			Annotations: map[string]string{
-				"iprewrite.windowsreip.io/eth0-ip": "10.0.2.100/24;10.0.2.1",
+				"iprewrite.reip.io/eth0-ip": "10.0.2.100/24;10.0.2.1",
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -104,7 +159,7 @@ func TestHandleBlockVolumeDevice(t *testing.T) {
 	pod := corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{
-				"iprewrite.windowsreip.io/eth0-ip": "10.0.2.100/24;10.0.2.1",
+				"iprewrite.reip.io/eth0-ip": "10.0.2.100/24;10.0.2.1",
 			},
 		},
 		Spec: corev1.PodSpec{

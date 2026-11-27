@@ -3,9 +3,14 @@ set -euo pipefail
 #
 # RHEL IP Rewrite Handler — Augeas-Based
 #
-# Rewrites static IP configuration on RHEL 7/8/9/10 guest filesystems
+# Rewrites guest IPv4 (and optional DNS) on RHEL 7/8/9/10 filesystems
 # using guestfish and Augeas. Supports both ifcfg (Shellvars.lns) and
 # NetworkManager keyfile (NetworkManager.lns) config formats.
+#
+# Declarative annotations win: if the operator is asked to set a static IP
+# on an interface, existing on-disk DHCP (ifcfg BOOTPROTO=dhcp/bootp or
+# NM ipv4.method=auto/dhcp) is converted to static. Gateway and DNS come
+# from the same rewrite inputs.
 #
 # Called by entrypoint.sh via 'source'. All configuration is available
 # through exported REWRITE_* environment variables:
@@ -239,16 +244,10 @@ for ((i = 0; i < REWRITE_IFACE_COUNT; i++)); do
     # Strategy 2: Check ifcfg by DEVICE field (handles DEVICE != filename)
     elif [[ -n "${IFCFG_IFACE_PATHS[${target_iface}]+isset}" ]]; then
         aug_path="${IFCFG_IFACE_PATHS[${target_iface}]}"
-
-        # Refuse DHCP-configured interfaces (DHCP-to-static not supported)
         bootproto="${IFCFG_BOOTPROTO[${aug_path}]:-}"
         if [[ "${bootproto}" == "dhcp" || "${bootproto}" == "bootp" ]]; then
-            log_error "Interface '${target_iface}' has BOOTPROTO=${bootproto} (DHCP) — refusing to convert to static"
-            log_error "DHCP-to-static conversion is not supported; configure the interface as static first"
-            rm -f "${GF_STDERR}"
-            return 1
+            log_info "  Interface '${target_iface}': ifcfg BOOTPROTO=${bootproto} — will convert to static (declarative reIP wins)"
         fi
-
         format="ifcfg"
         log_info "  Interface '${target_iface}': matched ifcfg (DEVICE) at ${aug_path}"
 
@@ -271,7 +270,6 @@ for ((i = 0; i < REWRITE_IFACE_COUNT; i++)); do
             : > "${GF_STDERR}"
 
             if (( verify_rc == 0 )) && [[ "${verify_output}" == "true" ]]; then
-                # File exists — check BOOTPROTO isn't DHCP
                 bp_cmd="aug-init / 0\naug-get '${candidate_path}/BOOTPROTO'"
                 bp_output=""
                 bp_rc=0
@@ -281,12 +279,9 @@ for ((i = 0; i < REWRITE_IFACE_COUNT; i++)); do
                 if (( bp_rc == 0 )); then
                     bp_val="${bp_output}"
                     if [[ "${bp_val}" == "dhcp" || "${bp_val}" == "bootp" ]]; then
-                        log_error "Interface '${target_iface}' has BOOTPROTO=${bp_val} (DHCP) — refusing to convert to static"
-                        rm -f "${GF_STDERR}"
-                        return 1
+                        log_info "  Interface '${target_iface}': ifcfg BOOTPROTO=${bp_val} — will convert to static (declarative reIP wins)"
                     fi
                 fi
-                # bp_rc != 0 means BOOTPROTO field absent — treat as static (OK)
 
                 format="ifcfg"
                 aug_path="${candidate_path}"

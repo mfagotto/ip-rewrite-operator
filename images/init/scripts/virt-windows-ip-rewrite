@@ -33,6 +33,23 @@ HIVEX_MULTI_SZ = 7
 
 ADAPTER_GUID = "{12345678-1234-1234-1234-123456789abc}"
 
+# Classic Windows NDIS loopback (Tcpip\Parameters\Interfaces). Writing a
+# guest static IP here makes guest-agent show the address on
+# "Loopback Pseudo-Interface 1" while the real NIC stays on APIPA.
+LOOPBACK_GUIDS = {
+    "{09bf0a54-e52d-11f1-8987-806e6f6e6963}",
+}
+
+PSEUDO_NAME_MARKERS = (
+    "loopback",
+    "isatap",
+    "teredo",
+    "6to4",
+    "pseudo-interface",
+    # Hyper-V/KD synthetic NIC — not the guest's Multus/bridge Ethernet.
+    "kernel debugger",
+)
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -241,6 +258,94 @@ def discover_root_dev(g) -> str:
     raise RuntimeError("No NTFS filesystem found on disk")
 
 
+def normalize_guid(guid: str) -> str:
+    """Lowercase GUID keys so Tcpip Interfaces and Control\\Network match."""
+    return (guid or "").strip().lower()
+
+
+def load_connection_names(g, cs_node: int) -> dict[str, str]:
+    """Map Tcpip interface GUID → Connection\\Name (e.g. Ethernet, Loopback…)."""
+    names: dict[str, str] = {}
+    try:
+        network = node_child(g, node_child(g, cs_node, "Control"), "Network")
+        # Network class GUID for network adapters
+        net_class = g.hivex_node_get_child(network, "{4D36E972-E325-11CE-BFC1-08002BE10318}")
+        if not net_class:
+            net_class = g.hivex_node_get_child(network, "{4d36e972-e325-11ce-bfc1-08002be10318}")
+        if not net_class:
+            return names
+        for handle in node_handles(g.hivex_node_children(net_class)):
+            guid = normalize_guid(g.hivex_node_name(handle) or "")
+            if not (guid.startswith("{") and guid.endswith("}")):
+                continue
+            conn = g.hivex_node_get_child(handle, "Connection")
+            if not conn:
+                continue
+            vh = g.hivex_node_get_value(conn, "Name")
+            if vh:
+                names[guid] = utf8_from_value(g, vh)
+    except RuntimeError as err:
+        log_warn(f"Could not read Control\\Network connection names: {err}")
+    return names
+
+
+def is_pseudo_adapter(guid: str, connection_name: str) -> bool:
+    if normalize_guid(guid) in {normalize_guid(g) for g in LOOPBACK_GUIDS}:
+        return True
+    lowered = (connection_name or "").lower()
+    return any(marker in lowered for marker in PSEUDO_NAME_MARKERS)
+
+
+def pick_real_adapter(
+    real_guids: list[str],
+    static_real: list[str],
+    adapter_dhcp: dict[str, str],
+    adapter_ip: dict[str, str],
+    connection_names: dict[str, str] | None = None,
+) -> str:
+    """Prefer Ethernet-named NIC, then static, then DHCP-with-IP, else first real."""
+    names = connection_names or {}
+    ethernet = [
+        guid
+        for guid in real_guids
+        if names.get(normalize_guid(guid), names.get(guid, "")).strip().lower() == "ethernet"
+    ]
+    if len(ethernet) == 1:
+        return ethernet[0]
+    if len(ethernet) > 1:
+        # Prefer DHCP/unset over a stale static leftover on a duplicate name.
+        for guid in ethernet:
+            if guid not in static_real:
+                return guid
+        return ethernet[0]
+    if static_real:
+        return static_real[0]
+    dhcp_with_ip = [
+        guid
+        for guid in real_guids
+        if adapter_dhcp.get(guid) != "0"
+        and adapter_ip.get(guid)
+        and adapter_ip.get(guid) not in ("", "0.0.0.0")
+    ]
+    if dhcp_with_ip:
+        return dhcp_with_ip[0]
+    return real_guids[0]
+
+
+def clear_pseudo_static_ip(g, adapter_node: dict[str, int], guid: str) -> None:
+    """Undo a prior mistaken static config on loopback/pseudo adapters."""
+    node = adapter_node.get(guid)
+    if not node:
+        return
+    log_warn(f"Clearing mistaken static IP from pseudo adapter {guid}")
+    g.hivex_node_set_value(node, "EnableDHCP", HIVEX_DWORD, dword_le(1))
+    # Empty MULTI_SZ list
+    empty = b"\x00\x00"
+    g.hivex_node_set_value(node, "IPAddress", HIVEX_MULTI_SZ, empty)
+    g.hivex_node_set_value(node, "SubnetMask", HIVEX_MULTI_SZ, empty)
+    g.hivex_node_set_value(node, "DefaultGateway", HIVEX_MULTI_SZ, empty)
+
+
 def rewrite_windows_disk() -> None:
     disk = os.environ.get("REWRITE_DISK", "")
     if not disk:
@@ -292,9 +397,10 @@ def rewrite_windows_disk() -> None:
         adapter_mask: dict[str, str] = {}
 
         for handle in node_handles(g.hivex_node_children(ifaces_node)):
-            name = (g.hivex_node_name(handle) or "").strip()
-            if not (name.startswith("{") and name.endswith("}")):
+            raw_name = (g.hivex_node_name(handle) or "").strip()
+            if not (raw_name.startswith("{") and raw_name.endswith("}")):
                 continue
+            name = normalize_guid(raw_name)
             guid_list.append(name)
             adapter_node[name] = handle
 
@@ -325,14 +431,44 @@ def rewrite_windows_disk() -> None:
                 f"No network adapter GUIDs found under {controlset}\\Services\\Tcpip\\Parameters\\Interfaces"
             )
 
+        connection_names = load_connection_names(g, cs_node)
+        for guid, cname in sorted(connection_names.items()):
+            log_info(f"  Connection name {guid}: {cname or '(empty)'}")
+
         all_guids = sorted(guid_list)
-        static_guids = [
-            guid for guid in all_guids
+        real_guids = [
+            guid
+            for guid in all_guids
+            if not is_pseudo_adapter(guid, connection_names.get(guid, ""))
+        ]
+        pseudo_guids = [guid for guid in all_guids if guid not in real_guids]
+        for guid in pseudo_guids:
+            log_info(
+                f"  Skipping pseudo adapter {guid} "
+                f"({connection_names.get(guid) or 'known loopback/tunnel'})"
+            )
+
+        if not real_guids:
+            raise RuntimeError(
+                "No real (non-loopback) network adapters found under Tcpip\\Parameters\\Interfaces"
+            )
+
+        static_real = [
+            guid
+            for guid in real_guids
             if adapter_dhcp.get(guid) == "0"
             and adapter_ip.get(guid)
             and adapter_ip.get(guid) != "0.0.0.0"
         ]
-        log_info(f"Static-IP adapters: {len(static_guids)}, Total adapters: {len(all_guids)}")
+        log_info(
+            f"Real adapters: {len(real_guids)}, static-IP real: {len(static_real)}, "
+            f"pseudo skipped: {len(pseudo_guids)}, total: {len(all_guids)}"
+        )
+
+        # Undo earlier bugs that parked the guest IP on loopback.
+        for guid in pseudo_guids:
+            if adapter_dhcp.get(guid) == "0" and adapter_ip.get(guid) not in ("", "0.0.0.0", None):
+                clear_pseudo_static_ip(g, adapter_node, guid)
 
         assigned: set[str] = set()
         iface_to_guid: dict[int, str] = {}
@@ -350,14 +486,16 @@ def rewrite_windows_disk() -> None:
 
             matched = ""
             if iface_count == 1:
-                if static_guids:
-                    matched = static_guids[0]
-                    log_info(f"  Single-NIC match: static-IP adapter {matched}")
-                elif all_guids:
-                    matched = all_guids[0]
-                    log_warn(f"  No static-IP adapter — selecting {matched} (will convert to static)")
+                matched = pick_real_adapter(
+                    real_guids, static_real, adapter_dhcp, adapter_ip, connection_names
+                )
+                cname = connection_names.get(matched, "")
+                log_info(
+                    f"  Single-NIC match: {matched}"
+                    + (f" ({cname})" if cname else "")
+                )
             else:
-                for guid in all_guids:
+                for guid in real_guids:
                     if guid in assigned:
                         continue
                     existing_ip = adapter_ip.get(guid) or ""
@@ -369,7 +507,7 @@ def rewrite_windows_disk() -> None:
                         log_info(f"  Subnet match: {guid} (existing {existing_ip}/{existing_mask})")
                         break
                 if not matched:
-                    for guid in all_guids:
+                    for guid in real_guids:
                         if guid not in assigned:
                             matched = guid
                             log_info(f"  Fallback adapter {guid}")
@@ -389,7 +527,12 @@ def rewrite_windows_disk() -> None:
             guid = iface_to_guid[i]
             node = adapter_node[guid]
             target_mask = prefix_to_mask(target_prefix)
-            log_info(f"Writing {target_iface} → {guid}: ip={target_ip} mask={target_mask} gw={target_gw}")
+            cname = connection_names.get(guid, "")
+            log_info(
+                f"Writing {target_iface} → {guid}"
+                + (f" ({cname})" if cname else "")
+                + f": ip={target_ip} mask={target_mask} gw={target_gw}"
+            )
             g.hivex_node_set_value(node, "EnableDHCP", HIVEX_DWORD, dword_le(0))
             g.hivex_node_set_value(node, "IPAddress", HIVEX_MULTI_SZ, utf16le_multisz(target_ip))
             g.hivex_node_set_value(node, "SubnetMask", HIVEX_MULTI_SZ, utf16le_multisz(target_mask))

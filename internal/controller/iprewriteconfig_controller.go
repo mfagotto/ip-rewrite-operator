@@ -34,8 +34,8 @@ type IPRewriteConfigReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=iprewrite.windowsreip.io,resources=iprewriteconfigs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=iprewrite.windowsreip.io,resources=iprewriteconfigs/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=iprewrite.reip.io,resources=iprewriteconfigs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=iprewrite.reip.io,resources=iprewriteconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=security.openshift.io,resources=securitycontextconstraints,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;patch
 

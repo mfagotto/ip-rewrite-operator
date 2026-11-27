@@ -1,42 +1,23 @@
 # Build the ip-rewrite init container image.
 #
-# This image provides guestfs-tools (guestfish, virt-inspector), Augeas,
-# hivex, and NTFS support for inspecting and modifying guest VM filesystems.
-# It is used as an init container injected into virt-launcher pods to rewrite
-# static IP configuration on guest disks before VM boot.
-#
-# CentOS Stream 9 is used instead of UBI9 because the required packages
-# (guestfs-tools, libguestfs-winsupport) are in full RHEL 9 AppStream repos,
-# which are not available in UBI repos without RHEL entitlements.
-# Those packages are not published for ppc64le, so CI/release build
-# linux/amd64 and linux/arm64 only.
+# guestfs-tools / libguestfs-winsupport are not in free UBI repos (need RHEL
+# AppStream entitlements). CentOS Stream 10 is the RHEL-10-aligned free base.
+# Base digest pinned; dnf update applied at build for Quay VA hygiene.
 #
 # Build:
 #   podman build -t ip-rewrite-init:dev images/init/
 #
-# Run (no elevated capabilities needed — libguestfs direct backend runs
-# a user-mode QEMU appliance; filesystem ops happen inside the VM):
-#   podman run --rm ip-rewrite-init:dev guestfish --version
-#
 # Security model:
-#   The init container runs unprivileged (UID 107/qemu, all caps dropped).
-#   Three settings make this possible:
-#     1. LIBGUESTFS_BACKEND=direct — bypasses libvirt (no SYS_ADMIN needed)
-#     2. LIBGUESTFS_PATH=/guestfs-appliance — pre-built appliance avoids
-#        supermin running at runtime (which would need root)
-#     3. /dev/kvm via device plugin — the QEMU appliance uses KVM for
-#        performance; requested via devices.kubevirt.io/kvm resource limit
-#
-#   This mirrors the approach used by CDI (containerized-data-importer)
-#   and Forklift (MTV), which run virt-customize in unprivileged pods.
+#   Unprivileged UID 107/qemu, all caps dropped.
+#   LIBGUESTFS_BACKEND=direct + pre-built appliance + /dev/kvm device plugin.
 
-FROM quay.io/centos/centos:stream9
+FROM quay.io/centos/centos@sha256:b042adb7687b322f80765277b552dcdd9c5f98bd3ca64e2f46175d2ae55fc82b
 
-# Install guestfs-tools and all required dependencies for guest filesystem
-# manipulation. libguestfs-winsupport provides NTFS support via the
-# libguestfs supermin appliance (replaces ntfs-3g which requires EPEL).
-# qemu-img is needed to convert the appliance root to qcow2 format.
-#
+# Refresh packages first so Quay Security Scanner sees current Stream 10 fixes.
+RUN dnf -y update --nodocs --setopt=install_weak_deps=False \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf /var/log/dnf*
+
 # Packages:
 #   guestfs-tools          - guestfish, virt-inspector, libguestfs appliance
 #   augeas                 - augtool CLI for structured config editing
@@ -60,25 +41,20 @@ RUN dnf install -y --nodocs --setopt=install_weak_deps=False \
     && rm -rf /var/cache/dnf /var/log/dnf*
 
 # Pre-build a fixed libguestfs appliance so supermin does NOT need to run
-# at runtime.  This eliminates the need for root/SYS_ADMIN capabilities.
-# The root filesystem is converted to qcow2 to avoid sparse-file issues
-# across container storage drivers (same approach as kubevirt/libguestfs-appliance).
+# at runtime (eliminates root/SYS_ADMIN). Convert root to qcow2 for storage drivers.
 RUN mkdir -p /guestfs-appliance \
     && LIBGUESTFS_BACKEND=direct libguestfs-make-fixed-appliance /guestfs-appliance \
     && qemu-img convert -c -O qcow2 /guestfs-appliance/root /guestfs-appliance/root.qcow2 \
     && mv /guestfs-appliance/root.qcow2 /guestfs-appliance/root
 
-# Use the direct backend (no libvirt) and point to the pre-built appliance.
 ENV LIBGUESTFS_BACKEND=direct
 ENV LIBGUESTFS_PATH=/guestfs-appliance
 ENV HOME=/tmp
 ENV TMPDIR=/tmp
 
-# Copy entrypoint and handler scripts
 COPY scripts/ /scripts/
 RUN chmod +x /scripts/*.sh /scripts/virt-windows-ip-rewrite
 
-# Run as qemu user (UID 107) — same as MTV/Forklift virt-v2v pods.
 USER 107
 
 ENTRYPOINT ["/scripts/entrypoint.sh"]

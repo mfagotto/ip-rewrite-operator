@@ -1,15 +1,49 @@
-# Fragment to add to a VirtualMachine for IP rewrite on next stop/start.
+# Lean fragments for VirtualMachine opt-in (0.2.0).
+# Copy the template.metadata labels/annotations onto your VM.
+# Put them on spec.template.metadata so KubeVirt copies them to the virt-launcher pod.
+#
+# Annotation shape is the same for Linux and Windows:
+#   iprewrite.reip.io/<iface>-ip: "<ipv4>/<prefix>;<gateway>"
+#   iprewrite.reip.io/dns: "<dns1>,<dns2>"   # optional
+#
+# <iface> meaning differs by guest OS in 0.2.0 — see comments on each example.
+# (0.2.1 plans MAC / KubeVirt interface-name targeting instead.)
+---
+# Example A — RHEL / Linux
+# <iface> MUST be the real guest device name (NM interface-name / ifcfg DEVICE).
+# Wrong name → init finds no config and fails.
+# Typical: RHEL 8/9 often eth0; RHEL 10 often enp1s0 (confirm in guest or golden).
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
 metadata:
-  name: example-vm
-  namespace: vm-net-demo
+  name: example-rhel
+  namespace: my-vms
 spec:
   template:
     metadata:
       labels:
-        iprewrite.windowsreip.io/enabled: "true"
+        iprewrite.reip.io/enabled: "true"
       annotations:
-        iprewrite.windowsreip.io/eth0-ip: "10.0.2.100/24;10.0.2.1"
-        iprewrite.windowsreip.io/dns: "10.0.2.10,10.0.2.11"
+        # Use the actual guest NIC name for this image:
+        iprewrite.reip.io/enp1s0-ip: "10.0.2.100/24;10.0.2.1"
+        iprewrite.reip.io/dns: "10.0.2.10,10.0.2.11"
+    spec: {}
+---
+# Example B — Windows Server (single NIC)
+# Same annotation keys. For one NIC, the Windows handler matches the real
+# Tcpip adapter and largely ignores the <iface> string — eth0 is a
+# conventional logical id, not the Connection name "Ethernet".
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: example-windows
+  namespace: my-vms
+spec:
+  template:
+    metadata:
+      labels:
+        iprewrite.reip.io/enabled: "true"
+      annotations:
+        iprewrite.reip.io/eth0-ip: "10.0.2.110/24;10.0.2.1"
+        iprewrite.reip.io/dns: "10.0.2.10,10.0.2.11"
     spec: {}

@@ -1,13 +1,13 @@
-apiVersion: iprewrite.windowsreip.io/v1alpha1
+apiVersion: iprewrite.reip.io/v1alpha1
 kind: IPRewriteConfig
 metadata:
   name: cluster
 spec:
   targetNamespaces:
-    - vm-net-demo
+    - my-vms
   virtLauncherServiceAccountNames:
     - default
-  initContainerImage: ghcr.io/mfagotto/ip-rewrite-init:latest
+  initContainerImage: quay.io/mfagotto/ip-rewrite-operator:init-0.2.0
   initContainerPullPolicy: IfNotPresent
   requestKVMDevice: true
   manageSCC: true

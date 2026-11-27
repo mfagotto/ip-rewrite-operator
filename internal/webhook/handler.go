@@ -11,6 +11,8 @@ package webhook
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -24,9 +26,15 @@ import (
 
 const (
 	// EnabledLabel opts a VM (via pod template) into IP rewrite.
-	EnabledLabel = "iprewrite.windowsreip.io/enabled"
+	EnabledLabel = "iprewrite.reip.io/enabled"
 
-	annotationPrefix = "iprewrite.windowsreip.io/"
+	// AppliedAnnotation stores DesiredConfigFingerprint of the last successfully
+	// applied IP/DNS annotations. When it matches the current desired fingerprint,
+	// the webhook skips init injection (stop/start with unchanged IP → no re-IP).
+	AppliedAnnotation = "iprewrite.reip.io/applied"
+
+	// AnnotationPrefix is the shared prefix for IP/DNS/applied annotations.
+	AnnotationPrefix = "iprewrite.reip.io/"
 	dnsSuffix        = "dns"
 	ipSuffix         = "-ip"
 
@@ -36,7 +44,7 @@ const (
 	kvmDeviceResource = "devices.kubevirt.io/kvm"
 
 	// DefaultInitContainerImage used when not configured.
-	DefaultInitContainerImage = "ghcr.io/mfagotto/ip-rewrite-init:latest"
+	DefaultInitContainerImage = "quay.io/mfagotto/ip-rewrite-operator:init-0.2.0"
 
 	// MutatePodPath is the admission webhook HTTP path.
 	MutatePodPath = "/mutate-v1-pod"
@@ -76,6 +84,13 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 	envVars := annotationsToEnvVars(pod.Annotations)
 	if len(envVars) == 0 {
 		logger.Info("No IP rewrite annotations found, skipping injection")
+		return admission.Allowed("")
+	}
+
+	desired := DesiredConfigFingerprint(pod.Annotations)
+	if applied := pod.Annotations[AppliedAnnotation]; applied != "" && applied == desired {
+		logger.Info("Desired IP config unchanged (applied fingerprint match), skipping injection",
+			"fingerprint", desired)
 		return admission.Allowed("")
 	}
 
@@ -145,7 +160,7 @@ func (h *Handler) Handle(ctx context.Context, req admission.Request) admission.R
 func annotationsToEnvVars(annotations map[string]string) []corev1.EnvVar {
 	keys := make([]string, 0, len(annotations))
 	for key := range annotations {
-		if strings.HasPrefix(key, annotationPrefix) {
+		if strings.HasPrefix(key, AnnotationPrefix) && key != AppliedAnnotation {
 			keys = append(keys, key)
 		}
 	}
@@ -154,7 +169,7 @@ func annotationsToEnvVars(annotations map[string]string) []corev1.EnvVar {
 	var envVars []corev1.EnvVar
 	for _, key := range keys {
 		value := annotations[key]
-		suffix := key[len(annotationPrefix):]
+		suffix := key[len(AnnotationPrefix):]
 		switch {
 		case suffix == dnsSuffix:
 			envVars = append(envVars, corev1.EnvVar{Name: "IPREWRITE_DNS", Value: value})
@@ -165,6 +180,25 @@ func annotationsToEnvVars(annotations map[string]string) []corev1.EnvVar {
 		}
 	}
 	return envVars
+}
+
+// DesiredConfigFingerprint returns a stable SHA-256 hex digest of the desired
+// IP/DNS rewrite annotations (excludes the applied marker itself).
+func DesiredConfigFingerprint(annotations map[string]string) string {
+	lines := make([]string, 0, len(annotations))
+	for key, value := range annotations {
+		if !strings.HasPrefix(key, AnnotationPrefix) || key == AppliedAnnotation {
+			continue
+		}
+		suffix := key[len(AnnotationPrefix):]
+		if suffix != dnsSuffix && !strings.HasSuffix(suffix, ipSuffix) {
+			continue
+		}
+		lines = append(lines, key+"="+value)
+	}
+	sort.Strings(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:])
 }
 
 func blockModeVolumes(pod *corev1.Pod) map[string]bool {

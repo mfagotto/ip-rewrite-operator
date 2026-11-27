@@ -4,13 +4,13 @@ kind: ClusterRole
 metadata:
   name: ip-rewrite-operator-manager
 rules:
-  - apiGroups: [iprewrite.windowsreip.io]
+  - apiGroups: [iprewrite.reip.io]
     resources: [iprewriteconfigs]
     verbs: [get, list, watch, create, update, patch, delete]
-  - apiGroups: [iprewrite.windowsreip.io]
+  - apiGroups: [iprewrite.reip.io]
     resources: [iprewriteconfigs/status]
     verbs: [get, update, patch]
-  - apiGroups: [iprewrite.windowsreip.io]
+  - apiGroups: [iprewrite.reip.io]
     resources: [iprewriteconfigs/finalizers]
     verbs: [update]
   - apiGroups: [""]
@@ -22,12 +22,23 @@ rules:
   - apiGroups: [security.openshift.io]
     resources: [securitycontextconstraints]
     verbs: [get, list, watch, create, update, patch]
+  # Required to escalate "use" onto the managed SCC via ClusterRole (RBAC escalation rules)
+  - apiGroups: [security.openshift.io]
+    resources: [securitycontextconstraints]
+    resourceNames: [ip-rewrite-operator]
+    verbs: [use]
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
+  - apiGroups: [kubevirt.io]
+    resources: [virtualmachines]
+    verbs: [get, list, watch, patch, update]
+  - apiGroups: [kubevirt.io]
+    resources: [virtualmachineinstances]
+    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

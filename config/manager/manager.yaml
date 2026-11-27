@@ -35,13 +35,13 @@ spec:
       serviceAccountName: ip-rewrite-operator
       containers:
         - name: manager
-          image: ghcr.io/mfagotto/ip-rewrite-operator:latest
-          imagePullPolicy: IfNotPresent
+          image: quay.io/mfagotto/ip-rewrite-operator:0.2.0
+          imagePullPolicy: Always
           args:
             - --leader-elect
             - --cert-dir=/var/run/secrets/serving-cert
             - --webhook-port=9443
-            - --init-container-image=ghcr.io/mfagotto/ip-rewrite-init:latest
+            - --init-container-image=quay.io/mfagotto/ip-rewrite-operator:init-0.2.0
             - --init-container-pull-policy=IfNotPresent
             - --request-kvm-device=true
           ports:
